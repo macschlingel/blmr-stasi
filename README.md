@@ -32,7 +32,7 @@ A data collection tool that fetches event data from easyVerein's API for the BLM
 
 2. Clone and configure:
    ```bash
-   git clone git@github.com:bastianl/blmr-stasi.git
+   git clone git@github.com:macschlingel/blmr-stasi.git
    cd blmr-stasi
    cp .env.example .env
    ```
