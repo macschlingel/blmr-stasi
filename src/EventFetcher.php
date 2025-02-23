@@ -1,5 +1,10 @@
 <?php
 
+// At the very beginning of the file
+if (php_sapi_name() !== 'cli') {
+    die('This script can only be run from the command line');
+}
+
 // Load .env file
 function loadEnv($path = null) {
     if ($path === null) {
@@ -17,20 +22,29 @@ function loadEnv($path = null) {
             list($key, $value) = explode('=', $line, 2);
             $key = trim($key);
             $value = trim($value);
+            
+            // Convert 'true'/'false' strings to actual booleans
+            if (strtolower($value) === 'true') $value = '1';
+            if (strtolower($value) === 'false') $value = '';
+            
             putenv("$key=$value");
         }
     }
 }
 
 class EventFetcher {
-    private $apiBaseUrl = 'https://easyverein.com/api/v2.0';
-    private $apiToken;
-    private $pdo;
-    private $tokenRefreshCallback;
+    protected $apiBaseUrl = 'https://easyverein.com/api/v2.0';
+    protected $apiToken;
+    protected $pdo;
+    protected $tokenRefreshCallback;
+    protected $debug;
+    protected $tablePrefix;
 
     public function __construct($apiToken, $dbHost, $dbName, $dbUser, $dbPass, $tokenRefreshCallback = null) {
         $this->apiToken = $apiToken;
         $this->tokenRefreshCallback = $tokenRefreshCallback;
+        $this->debug = getenv('DEBUG') === '1';
+        $this->tablePrefix = getenv('TABLE_PREFIX') ?: '';
         
         // Initialize database connection
         $dsn = "mysql:host={$dbHost};port=3306;dbname={$dbName};charset=utf8mb4";
@@ -40,7 +54,13 @@ class EventFetcher {
         ]);
     }
 
-    private function refreshToken() {
+    protected function log($message, $isDebug = false) {
+        if (!$isDebug || ($isDebug && $this->debug)) {
+            echo $message . "\n";
+        }
+    }
+
+    protected function refreshToken() {
         echo "Token needs refreshing...\n";
         
         $ch = curl_init();
@@ -66,14 +86,14 @@ class EventFetcher {
         }
     }
 
-    private function makeApiRequest($endpoint, $params = []) {
+    protected function makeApiRequest($endpoint, $params = []) {
         $url = "{$this->apiBaseUrl}/{$endpoint}";
         
         if (!empty($params)) {
             $url .= '?' . http_build_query($params);
         }
 
-        echo "Making request to: {$url}\n";
+        $this->log("Making request to: {$url}", true);
 
         $maxRetries = 5;
         $attempt = 0;
@@ -115,7 +135,17 @@ class EventFetcher {
                 throw new Exception("API request failed with status code: {$statusCode}, Response: {$response}");
             }
 
-            return json_decode($response, true);
+            $decodedResponse = json_decode($response, true);
+            
+            // Only print detailed response in debug mode
+            if ($this->debug) {
+                $this->log("\nAPI Response:", true);
+                $this->log("Status Code: {$statusCode}", true);
+                $this->log("Response Body:", true);
+                $this->log(json_encode($decodedResponse, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n", true);
+            }
+
+            return $decodedResponse;
         }
         
         throw new Exception("Failed after {$maxRetries} attempts due to rate limiting");
@@ -167,7 +197,7 @@ class EventFetcher {
         }
 
         $stmt = $this->pdo->prepare("
-            INSERT INTO participations (
+            INSERT INTO {$this->tablePrefix}participations (
                 id, event_id, member_id, state
             ) VALUES (
                 :id, :event_id, :member_id, :state
@@ -186,12 +216,25 @@ class EventFetcher {
     }
 
     public function getEventsForDay($startDate, $endDate) {
+        $calendarIds = getenv('CALENDAR_IDS');
+
+        if ($this->debug) {
+            $this->log("Filtering for calendar IDs: " . ($calendarIds ?: 'none'), true);
+        }
+
         $params = [
             'start__gte' => $startDate,
             'start__lte' => $endDate,
-            'calendar' => '22014754',
             'limit' => 100
         ];
+
+        // Only add calendar filter if calendar IDs are specified
+        if (!empty($calendarIds)) {
+            $params['calendar__in'] = $calendarIds;
+            echo "Filtering for calendar IDs: $calendarIds\n";
+        } else {
+            echo "No calendar filter applied - fetching all events\n";
+        }
 
         $allEvents = [];
         $hasMore = true;
@@ -201,7 +244,13 @@ class EventFetcher {
             
             if (isset($response['results'])) {
                 $allEvents = array_merge($allEvents, $response['results']);
-                echo "Fetched " . count($response['results']) . " events\n";
+                if ($this->debug) {
+                    $this->log("Fetched " . count($response['results']) . " events", true);
+                    if (count($response['results']) > 0) {
+                        $this->log("\nSample event structure:", true);
+                        $this->log(print_r($response['results'][0], true), true);
+                    }
+                }
             }
 
             // Check if there are more pages
@@ -219,47 +268,90 @@ class EventFetcher {
     }
 
     public function saveEvent($event, $participantCount) {
-        // Convert ISO 8601 dates to MySQL datetime format
-        $startTime = new DateTime($event['start']);
-        $endTime = new DateTime($event['end']);
+        try {
+            $this->pdo->beginTransaction();
 
-        $stmt = $this->pdo->prepare("
-            INSERT INTO events (
-                id, calendar_id, name, description,
-                location_name, location_object,
-                start_time, end_time, max_participants, actual_participants
-            ) VALUES (
-                :id, :calendar_id, :name, :description,
-                :location_name, :location_object,
-                :start_time, :end_time, :max_participants, :actual_participants
-            ) ON DUPLICATE KEY UPDATE
-                calendar_id = :calendar_id,
-                name = :name,
-                description = :description,
-                location_name = :location_name,
-                location_object = :location_object,
-                start_time = :start_time,
-                end_time = :end_time,
-                max_participants = :max_participants,
-                actual_participants = :actual_participants
-        ");
+            // Convert ISO 8601 dates to MySQL datetime format
+            $startTime = new DateTime($event['start']);
+            $endTime = new DateTime($event['end']);
 
-        return $stmt->execute([
-            ':id' => $event['id'],
-            ':calendar_id' => $event['calendar']['id'] ?? null,
-            ':name' => $event['name'],
-            ':description' => $event['description'] ?? '',
-            ':location_name' => $event['locationName'] ?? null,
-            ':location_object' => $event['locationObject'] ? json_encode($event['locationObject']) : null,
-            ':start_time' => $startTime->format('Y-m-d H:i:s'),
-            ':end_time' => $endTime->format('Y-m-d H:i:s'),
-            ':max_participants' => $event['maxParticipators'] ?? null,
-            ':actual_participants' => $participantCount
-        ]);
+            // Extract calendar ID from URL if present
+            $calendarId = null;
+            if (!empty($event['calendar'])) {
+                if (preg_match('/\/calendar\/(\d+)$/', $event['calendar'], $matches)) {
+                    $calendarId = (int)$matches[1];
+                }
+            }
+
+            $sql = "
+                INSERT INTO {$this->tablePrefix}events (
+                    id, calendar_id, name, description,
+                    location_name, location_object,
+                    start_time, end_time, max_participants, actual_participants
+                ) VALUES (
+                    :id, :calendar_id, :name, :description,
+                    :location_name, :location_object,
+                    :start_time, :end_time, :max_participants, :actual_participants
+                ) ON DUPLICATE KEY UPDATE
+                    calendar_id = :calendar_id,
+                    name = :name,
+                    description = :description,
+                    location_name = :location_name,
+                    location_object = :location_object,
+                    start_time = :start_time,
+                    end_time = :end_time,
+                    max_participants = :max_participants,
+                    actual_participants = :actual_participants
+            ";
+
+            $params = [
+                ':id' => $event['id'],
+                ':calendar_id' => $calendarId,
+                ':name' => $event['name'],
+                ':description' => $event['description'] ?? '',
+                ':location_name' => $event['locationName'] ?? null,
+                ':location_object' => $event['locationObject'] ? json_encode($event['locationObject']) : null,
+                ':start_time' => $startTime->format('Y-m-d H:i:s'),
+                ':end_time' => $endTime->format('Y-m-d H:i:s'),
+                ':max_participants' => $event['maxParticipators'] ?? null,
+                ':actual_participants' => $participantCount
+            ];
+
+            // Only log detailed event data in debug mode
+            if ($this->debug) {
+                $this->log("\nEvent data:", true);
+                $this->log("ID: " . $event['id'], true);
+                $this->log("Calendar URL: " . ($event['calendar'] ?? 'null'), true);
+                $this->log("Extracted Calendar ID: " . ($calendarId ?? 'null'), true);
+                $this->log("\nSQL Parameters:", true);
+                $this->log(print_r($params, true), true);
+            }
+
+            // Always log basic event info
+            $this->log(sprintf(
+                "Event: %s (Max: %d, Current: %d)",
+                $event['name'],
+                $event['maxParticipators'] ?? 0,
+                $participantCount
+            ));
+
+            $stmt = $this->pdo->prepare($sql);
+            $result = $stmt->execute($params);
+
+            if (!$result) {
+                throw new Exception("Failed to save event");
+            }
+
+            $this->pdo->commit();
+            return true;
+        } catch (Exception $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
     }
 
     public function eventExists($eventId) {
-        $stmt = $this->pdo->prepare("SELECT id FROM events WHERE id = ?");
+        $stmt = $this->pdo->prepare("SELECT id FROM {$this->tablePrefix}events WHERE id = ?");
         $stmt->execute([$eventId]);
         return $stmt->fetch() !== false;
     }
@@ -322,47 +414,51 @@ try {
         $startDate = $currentDate->format('Y-m-d 00:00:00');
         $dayEndDate = $currentDate->format('Y-m-d 23:59:59');
         
-        echo "\nFetching events for " . $currentDate->format('Y-m-d') . "\n";
+        echo "\nProcessing day: " . $currentDate->format('Y-m-d') . "\n";
         
         $events = $fetcher->getEventsForDay($startDate, $dayEndDate);
         $totalEvents += count($events);
         
-        // Process events for this day
         foreach ($events as $event) {
-            $exists = $fetcher->eventExists($event['id']);
+            try {
+                $exists = $fetcher->eventExists($event['id']);
+                $fetcher->saveEvent($event, 0);
 
-            // Get participation count for this event
-            $participations = $fetcher->getEventParticipations($event['id']);
-            $confirmedParticipants = 0;
-            
-            // Save each participation
-            foreach ($participations as $participation) {
-                $fetcher->saveParticipation($participation, $event['id']);
-                if ($participation['state'] === 1) {
-                    $confirmedParticipants++;
+                $participations = $fetcher->getEventParticipations($event['id']);
+                $confirmedParticipants = 0;
+                
+                foreach ($participations as $participation) {
+                    $fetcher->saveParticipation($participation, $event['id']);
+                    if ($participation['state'] === 1) {
+                        $confirmedParticipants++;
+                    }
                 }
-            }
 
-            // Save to database
-            $fetcher->saveEvent($event, $confirmedParticipants);
+                if ($confirmedParticipants > 0) {
+                    $fetcher->saveEvent($event, $confirmedParticipants);
+                }
 
-            if ($exists) {
-                echo "Updated: " . $event['name'] . " (" . $event['start'] . ")\n";
-                $updatedEvents++;
-            } else {
-                echo "New: " . $event['name'] . " (" . $event['start'] . ")\n";
-                $newEvents++;
+                if ($exists) {
+                    echo "Updated: " . $event['name'] . " (" . $event['start'] . ")\n";
+                    $updatedEvents++;
+                } else {
+                    echo "New: " . $event['name'] . " (" . $event['start'] . ")\n";
+                    $newEvents++;
+                }
+            } catch (Exception $e) {
+                echo "Error processing event {$event['id']}: " . $e->getMessage() . "\n";
+                continue;
             }
         }
         
-        // Move to next day
         $currentDate->modify('+1 day');
     }
     
-    echo "\nProcessing complete:\n";
+    echo "\nSummary:\n";
     echo "Total events processed: " . $totalEvents . "\n";
     echo "New events: " . $newEvents . "\n";
     echo "Updated events: " . $updatedEvents . "\n";
+
 } catch (Exception $e) {
     echo "Error: " . $e->getMessage() . "\n";
 } 
