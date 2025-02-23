@@ -26,9 +26,11 @@ class EventFetcher {
     private $apiBaseUrl = 'https://easyverein.com/api/v2.0';
     private $apiToken;
     private $pdo;
+    private $tokenRefreshCallback;
 
-    public function __construct($apiToken, $dbHost, $dbName, $dbUser, $dbPass) {
+    public function __construct($apiToken, $dbHost, $dbName, $dbUser, $dbPass, $tokenRefreshCallback = null) {
         $this->apiToken = $apiToken;
+        $this->tokenRefreshCallback = $tokenRefreshCallback;
         
         // Initialize database connection
         $dsn = "mysql:host={$dbHost};port=3306;dbname={$dbName};charset=utf8mb4";
@@ -36,6 +38,32 @@ class EventFetcher {
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
         ]);
+    }
+
+    private function refreshToken() {
+        echo "Token needs refreshing...\n";
+        
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, "{$this->apiBaseUrl}/refresh-token");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            "Authorization: Bearer {$this->apiToken}",
+            'Accept: application/json'
+        ]);
+
+        $response = curl_exec($ch);
+        $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        if ($statusCode === 200) {
+            $data = json_decode($response, true);
+            $this->apiToken = $data['token'];
+            
+            if ($this->tokenRefreshCallback) {
+                call_user_func($this->tokenRefreshCallback, $this->apiToken);
+            }
+            
+            echo "Token refreshed successfully\n";
+        }
     }
 
     private function makeApiRequest($endpoint, $params = []) {
@@ -67,6 +95,13 @@ class EventFetcher {
             }
 
             curl_close($ch);
+
+            // Check if token refresh is needed
+            $headers = [];
+            if (isset($response['tokenRefreshNeeded']) && $response['tokenRefreshNeeded'] === true) {
+                $this->refreshToken();
+                continue; // Retry the request with new token
+            }
 
             if ($statusCode === 429) {
                 $attempt++;
@@ -269,7 +304,15 @@ try {
         throw new Exception("API token not found in environment variables");
     }
 
-    $fetcher = new EventFetcher($apiToken, $dbHost, $dbName, $dbUser, $dbPass);
+    // Create callback to save refreshed token
+    $tokenRefreshCallback = function($newToken) {
+        // Update .env file with new token
+        $envFile = __DIR__ . '/../.env';
+        $envContent = file_get_contents($envFile);
+        $envContent = preg_replace('/API_TOKEN=.*/', 'API_TOKEN=' . $newToken, $envContent);
+        file_put_contents($envFile, $envContent);
+    };
+    $fetcher = new EventFetcher($apiToken, $dbHost, $dbName, $dbUser, $dbPass, $tokenRefreshCallback);
     
     $totalEvents = 0;
     $updatedEvents = 0;

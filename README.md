@@ -6,6 +6,10 @@ A data collection tool that fetches event data from easyVerein's API for the BLM
 ## Features
 
 - Fetches events from BLMR's easyVerein calendar (ID: 22014754)
+- Handles API authentication:
+  - Automatic token refresh after 15 days
+  - Updates .env file with new token
+  - Retries requests with refreshed token
 - Tracks event details including:
   - Event name and description
   - Start and end times
