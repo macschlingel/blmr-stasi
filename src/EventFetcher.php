@@ -1,8 +1,7 @@
 <?php
-
-// At the very beginning of the file
-if (php_sapi_name() !== 'cli') {
-    die('This script can only be run from the command line');
+// Check if this is a CLI request or authorized web access
+if (php_sapi_name() !== 'cli' && !defined('APP_ACCESS')) {
+    die('This script can only be run from the command line or through the web interface');
 }
 
 // Load .env file
