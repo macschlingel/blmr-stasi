@@ -1,8 +1,15 @@
 CREATE TABLE `{prefix}calendars` (
   `id` int(11) NOT NULL,
+  `org_id` int(11) DEFAULT NULL,
   `name` varchar(255) DEFAULT NULL,
+  `description` text DEFAULT NULL,
+  `color` varchar(7) DEFAULT NULL,
+  `is_public` tinyint(1) DEFAULT 0,
+  `deleted_after` datetime DEFAULT NULL,
+  `deleted_by` int(11) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  KEY `org_id` (`org_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE `{prefix}events` (
@@ -77,18 +84,4 @@ CREATE TABLE `{prefix}members` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
-CREATE TABLE `calendars` (
-  `id` int(11) NOT NULL,
-  `org_id` int(11) DEFAULT NULL,
-  `name` varchar(255) DEFAULT NULL,
-  `description` text DEFAULT NULL,
-  `color` varchar(7) DEFAULT NULL,
-  `is_public` tinyint(1) DEFAULT 0,
-  `deleted_after` datetime DEFAULT NULL,
-  `deleted_by` int(11) DEFAULT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  PRIMARY KEY (`id`),
-  KEY `org_id` (`org_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;

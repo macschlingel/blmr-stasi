@@ -33,7 +33,7 @@ class CalendarFetcher {
     public function __construct($apiToken, $dbHost, $dbName, $dbUser, $dbPass, $tokenRefreshCallback = null) {
         $this->apiToken = $apiToken;
         $this->tokenRefreshCallback = $tokenRefreshCallback;
-        $this->tablePrefix = '';
+        $this->tablePrefix = getenv('TABLE_PREFIX') ?: '';
 
         try {
             $this->pdo = new PDO(

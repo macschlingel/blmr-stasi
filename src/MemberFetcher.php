@@ -16,7 +16,7 @@ class MemberFetcher {
     public function __construct($apiToken, $dbHost, $dbName, $dbUser, $dbPass, $tokenRefreshCallback = null) {
         $this->apiToken = $apiToken;
         $this->tokenRefreshCallback = $tokenRefreshCallback;
-        $this->tablePrefix = '';
+        $this->tablePrefix = getenv('TABLE_PREFIX') ?: '';
         $this->debug = getenv('DEBUG') === '1';
 
         try {
@@ -38,8 +38,6 @@ class MemberFetcher {
     protected function makeApiRequest($endpoint, $params = []) {
         $baseUrl = 'https://easyverein.com/api/v2.0/';
         $url = $baseUrl . $endpoint . '/?' . http_build_query($params);
-
-        echo "Making request to: {$url}\n";
 
         $maxRetries = 5;
         $attempt = 0;
@@ -80,7 +78,7 @@ class MemberFetcher {
             if ($httpCode === 429) {
                 $attempt++;
                 $sleepTime = ($attempt * 5);
-                echo "Rate limit hit, waiting {$sleepTime} seconds (attempt {$attempt} of {$maxRetries})...\n";
+                echo "Rate limit hit, waiting {$sleepTime} seconds...\n";
                 sleep($sleepTime);
                 continue;
             }
@@ -89,17 +87,7 @@ class MemberFetcher {
                 throw new Exception("API request failed with code $httpCode: $response");
             }
 
-            $decodedResponse = json_decode($response, true);
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                throw new Exception("Failed to decode JSON response: " . json_last_error_msg());
-            }
-
-            if ($this->debug) {
-                echo "Response contains " . count($decodedResponse['results'] ?? []) . " results\n";
-                echo "Next page: " . ($decodedResponse['next'] ?? 'none') . "\n";
-            }
-
-            return $decodedResponse;
+            return json_decode($response, true);
         }
         
         throw new Exception("Failed after {$maxRetries} attempts due to rate limiting");
@@ -115,8 +103,6 @@ class MemberFetcher {
         $allMembers = [];
         
         do {
-            echo "\nFetching page {$params['page']}...\n";
-            
             $response = $this->makeApiRequest('member', $params);
             
             if (!isset($response['results'])) {
@@ -132,8 +118,6 @@ class MemberFetcher {
             }
 
             $params['page']++;
-
-            // Wait for 1 second between requests
             sleep(1);
             
         } while (true);
@@ -190,10 +174,8 @@ class MemberFetcher {
                     $this->saveMember($member);
 
                     if ($exists) {
-                        echo "Updated member ID: {$member['id']}\n";
                         $updatedMembers++;
                     } else {
-                        echo "New member ID: {$member['id']}\n";
                         $newMembers++;
                     }
                 } catch (Exception $e) {
