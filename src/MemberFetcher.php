@@ -1,34 +1,143 @@
 <?php
+// Check if this is a CLI request or authorized web access
+if (php_sapi_name() !== 'cli' && !defined('APP_ACCESS')) {
+    die('This script can only be run from the command line or through the web interface');
+}
 
-require_once __DIR__ . '/EventFetcher.php';
+require_once __DIR__ . '/loadEnv.php';
 
-class MemberFetcher extends EventFetcher {
+class MemberFetcher {
+    private $apiToken;
+    private $pdo;
+    private $tablePrefix;
+    private $tokenRefreshCallback;
+    private $debug;
+
+    public function __construct($apiToken, $dbHost, $dbName, $dbUser, $dbPass, $tokenRefreshCallback = null) {
+        $this->apiToken = $apiToken;
+        $this->tokenRefreshCallback = $tokenRefreshCallback;
+        $this->tablePrefix = '';
+        $this->debug = getenv('DEBUG') === '1';
+
+        try {
+            $this->pdo = new PDO(
+                "mysql:host=$dbHost;dbname=$dbName;charset=utf8mb4",
+                $dbUser,
+                $dbPass,
+                [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                    PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4"
+                ]
+            );
+        } catch (PDOException $e) {
+            throw new Exception("Database connection failed: " . $e->getMessage());
+        }
+    }
+
+    protected function makeApiRequest($endpoint, $params = []) {
+        $baseUrl = 'https://easyverein.com/api/v2.0/';
+        $url = $baseUrl . $endpoint . '/?' . http_build_query($params);
+
+        echo "Making request to: {$url}\n";
+
+        $maxRetries = 5;
+        $attempt = 0;
+        
+        while ($attempt < $maxRetries) {
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                'Authorization: Bearer ' . $this->apiToken,
+                'Accept: application/json'
+            ]);
+            
+            // Add SSL verification options
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+            
+            // Add timeout
+            curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            
+            if ($response === false) {
+                $error = curl_error($ch);
+                $errno = curl_errno($ch);
+                curl_close($ch);
+                throw new Exception("cURL Error ($errno): $error");
+            }
+            
+            curl_close($ch);
+
+            if ($httpCode === 401 && strpos($response, 'tokenRefreshNeeded') !== false) {
+                throw new Exception("Token refresh needed");
+            }
+
+            if ($httpCode === 429) {
+                $attempt++;
+                $sleepTime = ($attempt * 5);
+                echo "Rate limit hit, waiting {$sleepTime} seconds (attempt {$attempt} of {$maxRetries})...\n";
+                sleep($sleepTime);
+                continue;
+            }
+
+            if ($httpCode !== 200) {
+                throw new Exception("API request failed with code $httpCode: $response");
+            }
+
+            $decodedResponse = json_decode($response, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                throw new Exception("Failed to decode JSON response: " . json_last_error_msg());
+            }
+
+            if ($this->debug) {
+                echo "Response contains " . count($decodedResponse['results'] ?? []) . " results\n";
+                echo "Next page: " . ($decodedResponse['next'] ?? 'none') . "\n";
+            }
+
+            return $decodedResponse;
+        }
+        
+        throw new Exception("Failed after {$maxRetries} attempts due to rate limiting");
+    }
+
     public function getMembers() {
         $params = [
             'has_left' => 'false',
-            'limit' => 100
+            'limit' => 100,
+            'page' => 1
         ];
 
         $allMembers = [];
-        $hasMore = true;
-        $page = 1;
-
-        while ($hasMore) {
-            $params['page'] = $page;
+        
+        do {
+            echo "\nFetching page {$params['page']}...\n";
+            
             $response = $this->makeApiRequest('member', $params);
             
-            if (isset($response['results'])) {
-                $allMembers = array_merge($allMembers, $response['results']);
-                echo "Fetched " . count($response['results']) . " members (page $page)\n";
+            if (!isset($response['results'])) {
+                break;
             }
 
-            // Check if there are more pages
-            $hasMore = isset($response['next']) && $response['next'] !== null;
-            if ($hasMore) {
-                $page++;
+            $results = $response['results'];
+            $allMembers = array_merge($allMembers, $results);
+            echo "Fetched " . count($results) . " members (total: " . count($allMembers) . " of {$response['count']})\n";
+            
+            if (empty($results) || !isset($response['next'])) {
+                break;
             }
-        }
 
+            $params['page']++;
+
+            // Wait for 1 second between requests
+            sleep(1);
+            
+        } while (true);
+        
         return $allMembers;
     }
 
@@ -37,7 +146,7 @@ class MemberFetcher extends EventFetcher {
             $this->pdo->beginTransaction();
 
             $stmt = $this->pdo->prepare("
-                INSERT INTO members (
+                INSERT INTO {$this->tablePrefix}members (
                     id, payment_amount, payment_interval_months
                 ) VALUES (
                     :id, :payment_amount, :payment_interval_months
@@ -81,10 +190,10 @@ class MemberFetcher extends EventFetcher {
                     $this->saveMember($member);
 
                     if ($exists) {
-                        echo "Updated member: {$member['membershipNumber']} ({$member['emailOrUserName']})\n";
+                        echo "Updated member ID: {$member['id']}\n";
                         $updatedMembers++;
                     } else {
-                        echo "New member: {$member['membershipNumber']} ({$member['emailOrUserName']})\n";
+                        echo "New member ID: {$member['id']}\n";
                         $newMembers++;
                     }
                 } catch (Exception $e) {
@@ -104,7 +213,7 @@ class MemberFetcher extends EventFetcher {
     }
 
     public function memberExists($memberId) {
-        $stmt = $this->pdo->prepare("SELECT id FROM members WHERE id = ?");
+        $stmt = $this->pdo->prepare("SELECT id FROM {$this->tablePrefix}members WHERE id = ?");
         $stmt->execute([$memberId]);
         return $stmt->fetch() !== false;
     }

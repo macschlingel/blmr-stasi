@@ -197,20 +197,40 @@ class EventFetcher {
 
         $stmt = $this->pdo->prepare("
             INSERT INTO {$this->tablePrefix}participations (
-                id, event_id, member_id, state
+                id, event_id, member_id, org_id, name, description,
+                show_name, state, price_group, deleted_after, deleted_by
             ) VALUES (
-                :id, :event_id, :member_id, :state
+                :id, :event_id, :member_id, :org_id, :name, :description,
+                :show_name, :state, :price_group, :deleted_after, :deleted_by
             ) ON DUPLICATE KEY UPDATE
                 event_id = :event_id,
                 member_id = :member_id,
-                state = :state
+                org_id = :org_id,
+                name = :name,
+                description = :description,
+                show_name = :show_name,
+                state = :state,
+                price_group = :price_group,
+                deleted_after = :deleted_after,
+                deleted_by = :deleted_by
         ");
+
+        $orgId = $this->extractIdFromUrl($participation['org']);
+        $deleteAfterDate = !empty($participation['_deleteAfterDate']) ? new DateTime($participation['_deleteAfterDate']) : null;
+        $deletedBy = $this->extractIdFromUrl($participation['_deletedBy']);
 
         return $stmt->execute([
             ':id' => $participation['id'],
             ':event_id' => $eventId,
             ':member_id' => $memberId,
-            ':state' => $participation['state']
+            ':org_id' => $orgId,
+            ':name' => $participation['name'],
+            ':description' => $participation['description'],
+            ':show_name' => $participation['showName'] ? 1 : 0,
+            ':state' => $participation['state'],
+            ':price_group' => $participation['priceGroup'],
+            ':deleted_after' => $deleteAfterDate?->format('Y-m-d H:i:s'),
+            ':deleted_by' => $deletedBy
         ]);
     }
 
@@ -273,47 +293,108 @@ class EventFetcher {
             // Convert ISO 8601 dates to MySQL datetime format
             $startTime = new DateTime($event['start']);
             $endTime = new DateTime($event['end']);
+            $startParticipation = !empty($event['startParticipation']) ? new DateTime($event['startParticipation']) : null;
+            $endParticipation = !empty($event['endParticipation']) ? new DateTime($event['endParticipation']) : null;
+            $deleteAfterDate = !empty($event['_deleteAfterDate']) ? new DateTime($event['_deleteAfterDate']) : null;
 
-            // Extract calendar ID from URL if present
-            $calendarId = null;
-            if (!empty($event['calendar'])) {
-                if (preg_match('/\/calendar\/(\d+)$/', $event['calendar'], $matches)) {
-                    $calendarId = (int)$matches[1];
-                }
-            }
+            // Extract IDs from URLs
+            $orgId = $this->extractIdFromUrl($event['org']);
+            $calendarId = $this->extractIdFromUrl($event['calendar']);
+            $parentId = $this->extractIdFromUrl($event['parent']);
+            $creatorId = $this->extractIdFromUrl($event['creator']);
+            $reservationParentEventId = $this->extractIdFromUrl($event['reservationParentEvent']);
+            $deletedBy = $this->extractIdFromUrl($event['_deletedBy']);
 
             $sql = "
                 INSERT INTO {$this->tablePrefix}events (
-                    id, calendar_id, name, description,
-                    location_name, location_object,
-                    start_time, end_time, max_participants, actual_participants
+                    id, org_id, calendar_id, parent_id, creator_id, reservation_parent_event_id,
+                    name, description, location_name, location_object, uid, prologue, note,
+                    min_participants, max_participants, start_participation, end_participation,
+                    start_time, end_time, access, all_day, weekdays, confirmation_to_addresses,
+                    send_mail_check, show_memberarea, is_public, mass_participations,
+                    is_interval, canceled, is_reservation, is_locked, is_protocol,
+                    actual_participants, deleted_after, deleted_by
                 ) VALUES (
-                    :id, :calendar_id, :name, :description,
-                    :location_name, :location_object,
-                    :start_time, :end_time, :max_participants, :actual_participants
+                    :id, :org_id, :calendar_id, :parent_id, :creator_id, :reservation_parent_event_id,
+                    :name, :description, :location_name, :location_object, :uid, :prologue, :note,
+                    :min_participants, :max_participants, :start_participation, :end_participation,
+                    :start_time, :end_time, :access, :all_day, :weekdays, :confirmation_to_addresses,
+                    :send_mail_check, :show_memberarea, :is_public, :mass_participations,
+                    :is_interval, :canceled, :is_reservation, :is_locked, :is_protocol,
+                    :actual_participants, :deleted_after, :deleted_by
                 ) ON DUPLICATE KEY UPDATE
+                    org_id = :org_id,
                     calendar_id = :calendar_id,
+                    parent_id = :parent_id,
+                    creator_id = :creator_id,
+                    reservation_parent_event_id = :reservation_parent_event_id,
                     name = :name,
                     description = :description,
                     location_name = :location_name,
                     location_object = :location_object,
+                    uid = :uid,
+                    prologue = :prologue,
+                    note = :note,
+                    min_participants = :min_participants,
+                    max_participants = :max_participants,
+                    start_participation = :start_participation,
+                    end_participation = :end_participation,
                     start_time = :start_time,
                     end_time = :end_time,
-                    max_participants = :max_participants,
-                    actual_participants = :actual_participants
-            ";
+                    access = :access,
+                    all_day = :all_day,
+                    weekdays = :weekdays,
+                    confirmation_to_addresses = :confirmation_to_addresses,
+                    send_mail_check = :send_mail_check,
+                    show_memberarea = :show_memberarea,
+                    is_public = :is_public,
+                    mass_participations = :mass_participations,
+                    is_interval = :is_interval,
+                    canceled = :canceled,
+                    is_reservation = :is_reservation,
+                    is_locked = :is_locked,
+                    is_protocol = :is_protocol,
+                    actual_participants = :actual_participants,
+                    deleted_after = :deleted_after,
+                    deleted_by = :deleted_by
+                ";
 
             $params = [
                 ':id' => $event['id'],
+                ':org_id' => $orgId,
                 ':calendar_id' => $calendarId,
+                ':parent_id' => $parentId,
+                ':creator_id' => $creatorId,
+                ':reservation_parent_event_id' => $reservationParentEventId,
                 ':name' => $event['name'],
                 ':description' => $event['description'] ?? '',
                 ':location_name' => $event['locationName'] ?? null,
-                ':location_object' => $event['locationObject'] ? json_encode($event['locationObject']) : null,
+                ':location_object' => $event['locationObject'] ?? null,
+                ':uid' => $event['uid'] ?? null,
+                ':prologue' => $event['prologue'] ?? '',
+                ':note' => $event['note'] ?? '',
+                ':min_participants' => $event['minParticipators'] ?? 0,
+                ':max_participants' => $event['maxParticipators'] ?? 0,
+                ':start_participation' => $startParticipation?->format('Y-m-d H:i:s'),
+                ':end_participation' => $endParticipation?->format('Y-m-d H:i:s'),
                 ':start_time' => $startTime->format('Y-m-d H:i:s'),
                 ':end_time' => $endTime->format('Y-m-d H:i:s'),
-                ':max_participants' => $event['maxParticipators'] ?? null,
-                ':actual_participants' => $participantCount
+                ':access' => $event['access'] ?? 0,
+                ':all_day' => isset($event['allDay']) ? ($event['allDay'] ? 1 : 0) : 0,
+                ':weekdays' => $event['weekdays'] ? json_encode($event['weekdays']) : null,
+                ':confirmation_to_addresses' => json_encode($event['confirmationToAddresses'] ?? []),
+                ':send_mail_check' => isset($event['sendMailCheck']) ? ($event['sendMailCheck'] ? 1 : 0) : 0,
+                ':show_memberarea' => isset($event['showMemberarea']) ? ($event['showMemberarea'] ? 1 : 0) : 0,
+                ':is_public' => isset($event['isPublic']) ? ($event['isPublic'] ? 1 : 0) : 0,
+                ':mass_participations' => isset($event['massParticipations']) ? ($event['massParticipations'] ? 1 : 0) : 0,
+                ':is_interval' => isset($event['isInterval']) ? ($event['isInterval'] ? 1 : 0) : 0,
+                ':canceled' => isset($event['canceled']) ? ($event['canceled'] ? 1 : 0) : 0,
+                ':is_reservation' => isset($event['isReservation']) ? ($event['isReservation'] ? 1 : 0) : 0,
+                ':is_locked' => isset($event['isLocked']) ? ($event['isLocked'] ? 1 : 0) : 0,
+                ':is_protocol' => isset($event['isProtocol']) ? ($event['isProtocol'] ? 1 : 0) : 0,
+                ':actual_participants' => $participantCount,
+                ':deleted_after' => $deleteAfterDate?->format('Y-m-d H:i:s'),
+                ':deleted_by' => $deletedBy
             ];
 
             // Only log detailed event data in debug mode
@@ -353,6 +434,14 @@ class EventFetcher {
         $stmt = $this->pdo->prepare("SELECT id FROM {$this->tablePrefix}events WHERE id = ?");
         $stmt->execute([$eventId]);
         return $stmt->fetch() !== false;
+    }
+
+    protected function extractIdFromUrl($url) {
+        if (empty($url)) return null;
+        if (preg_match('/\/(\d+)$/', $url, $matches)) {
+            return (int)$matches[1];
+        }
+        return null;
     }
 }
 

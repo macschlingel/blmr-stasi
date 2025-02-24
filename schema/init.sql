@@ -7,30 +7,66 @@ CREATE TABLE `{prefix}calendars` (
 
 CREATE TABLE `{prefix}events` (
   `id` int(11) NOT NULL,
+  `org_id` int(11) DEFAULT NULL,
   `calendar_id` int(11) DEFAULT NULL,
+  `parent_id` int(11) DEFAULT NULL,
+  `creator_id` int(11) DEFAULT NULL,
+  `reservation_parent_event_id` int(11) DEFAULT NULL,
   `name` varchar(255) DEFAULT NULL,
   `description` text DEFAULT NULL,
   `location_name` varchar(255) DEFAULT NULL,
   `location_object` text DEFAULT NULL,
+  `uid` varchar(255) DEFAULT NULL,
+  `prologue` text DEFAULT NULL,
+  `note` text DEFAULT NULL,
+  `min_participants` int(11) DEFAULT NULL,
+  `max_participants` int(11) DEFAULT NULL,
+  `start_participation` datetime DEFAULT NULL,
+  `end_participation` datetime DEFAULT NULL,
   `start_time` datetime DEFAULT NULL,
   `end_time` datetime DEFAULT NULL,
-  `max_participants` int(11) DEFAULT NULL,
+  `access` tinyint DEFAULT NULL,
+  `all_day` tinyint(1) DEFAULT NULL,
+  `weekdays` varchar(255) DEFAULT NULL,
+  `confirmation_to_addresses` text DEFAULT NULL,
+  `send_mail_check` tinyint(1) DEFAULT NULL,
+  `show_memberarea` tinyint(1) DEFAULT NULL,
+  `is_public` tinyint(1) DEFAULT NULL,
+  `mass_participations` tinyint(1) DEFAULT NULL,
+  `is_interval` tinyint(1) DEFAULT NULL,
+  `canceled` tinyint(1) DEFAULT NULL,
+  `is_reservation` tinyint(1) DEFAULT NULL,
+  `is_locked` tinyint(1) DEFAULT NULL,
+  `is_protocol` tinyint(1) DEFAULT NULL,
   `actual_participants` int(11) DEFAULT NULL,
+  `deleted_after` datetime DEFAULT NULL,
+  `deleted_by` int(11) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
   KEY `calendar_id` (`calendar_id`),
-  CONSTRAINT `{prefix}events_ibfk_1` FOREIGN KEY (`calendar_id`) REFERENCES `{prefix}calendars` (`id`)
+  KEY `org_id` (`org_id`),
+  KEY `parent_id` (`parent_id`),
+  KEY `creator_id` (`creator_id`),
+  KEY `reservation_parent_event_id` (`reservation_parent_event_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE `{prefix}participations` (
   `id` int(11) NOT NULL,
   `event_id` int(11) NOT NULL,
   `member_id` int(11) NOT NULL,
+  `org_id` int(11) DEFAULT NULL,
+  `name` varchar(255) DEFAULT NULL,
+  `description` text DEFAULT NULL,
+  `show_name` tinyint(1) DEFAULT NULL,
   `state` tinyint NOT NULL,
+  `price_group` varchar(255) DEFAULT NULL,
+  `deleted_after` datetime DEFAULT NULL,
+  `deleted_by` int(11) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
   KEY `event_id` (`event_id`),
   KEY `member_id` (`member_id`),
+  KEY `org_id` (`org_id`),
   CONSTRAINT `{prefix}participations_ibfk_1` FOREIGN KEY (`event_id`) REFERENCES `{prefix}events` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
@@ -41,4 +77,18 @@ CREATE TABLE `{prefix}members` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE `calendars` (
+  `id` int(11) NOT NULL,
+  `org_id` int(11) DEFAULT NULL,
+  `name` varchar(255) DEFAULT NULL,
+  `description` text DEFAULT NULL,
+  `color` varchar(7) DEFAULT NULL,
+  `is_public` tinyint(1) DEFAULT 0,
+  `deleted_after` datetime DEFAULT NULL,
+  `deleted_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `org_id` (`org_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
